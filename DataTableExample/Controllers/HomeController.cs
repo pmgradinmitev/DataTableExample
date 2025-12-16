@@ -37,9 +37,10 @@ namespace DataTableExample.Controllers
 
                 int pageSize = length != null ? Convert.ToInt32(length) : 0;
                 int skip = start != null ? Convert.ToInt32(start) : 0;
-                int recordsTotal = 0;
 
                 IQueryable<Medicine> query = _context.Medicines.AsQueryable();
+                // Total records in table (before filtering)
+                int recordsTotal = await query.CountAsync();
 
                 // Search
                 if (!string.IsNullOrEmpty(searchValue))
@@ -62,7 +63,7 @@ namespace DataTableExample.Controllers
                 }
 
                 // Total records after filtering
-                recordsTotal = await query.CountAsync();
+                int recordsFiltered = await query.CountAsync();
 
                 // Sorting
                 if (!string.IsNullOrEmpty(sortColumn) && !string.IsNullOrEmpty(sortColumnDirection))
@@ -93,7 +94,7 @@ namespace DataTableExample.Controllers
                     price = e.Price
                 }).ToListAsync();
 
-                return Json(new { draw = draw, recordsFiltered = recordsTotal, recordsTotal = recordsTotal, data = data });
+                return Json(new { draw = draw, recordsFiltered = recordsFiltered, recordsTotal = recordsTotal, data = data });
             }
             catch (Exception ex)
             {
