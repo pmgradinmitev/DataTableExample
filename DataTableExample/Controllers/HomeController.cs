@@ -4,6 +4,7 @@ using DataTableExample.ViewModels;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Diagnostics;
+using System.Globalization;
 
 namespace DataTableExample.Controllers
 {
@@ -26,19 +27,21 @@ namespace DataTableExample.Controllers
         [HttpPost]
         public async Task<IActionResult> GetMedicines()
         {
+            string? draw = null;
+
             try
             {
-                var draw = Request.Form["draw"].FirstOrDefault();
+                draw = Request.Form["draw"].FirstOrDefault();
                 var start = Request.Form["start"].FirstOrDefault();
                 var length = Request.Form["length"].FirstOrDefault();
                 var sortColumn = Request.Form["columns[" + Request.Form["order[0][column]"].FirstOrDefault() + "][name]"].FirstOrDefault();
                 var sortColumnDirection = Request.Form["order[0][dir]"].FirstOrDefault();
                 var searchValue = Request.Form["search[value]"].FirstOrDefault();
 
-                int pageSize = length != null ? Convert.ToInt32(length) : 0;
+                int pageSize = length != null ? Convert.ToInt32(length) : 10;
                 int skip = start != null ? Convert.ToInt32(start) : 0;
 
-                IQueryable<Medicine> query = _context.Medicines.AsQueryable();
+                IQueryable<Medicine> query = _context.Medicines;
                 // Total records in table (before filtering)
                 int recordsTotal = await query.CountAsync();
 
@@ -48,16 +51,16 @@ namespace DataTableExample.Controllers
                     searchValue = searchValue.ToLower(); // For case-insensitive search
 
                     bool isPriceSearch = decimal.TryParse(
-                                           searchValue,
-                                           System.Globalization.NumberStyles.Any,
-                                           System.Globalization.CultureInfo.InvariantCulture,
+                                           searchValue.Replace(',', '.'), // allow "5,99" as well as "5.99"
+                                           NumberStyles.Number,
+                                           CultureInfo.InvariantCulture,
                                            out decimal priceValue
                                          );
 
                     query = query.Where(m =>
-                       (m.Name.ToLower().Contains(searchValue)) ||
-                       (m.ActiveIngredient.ToLower().Contains(searchValue)) ||
-                       (m.Manufacturer.ToLower().Contains(searchValue)) ||
+                       m.Name.ToLower().Contains(searchValue) ||
+                       m.ActiveIngredient.ToLower().Contains(searchValue) ||
+                       m.Manufacturer.ToLower().Contains(searchValue) ||
                        (isPriceSearch && m.Price == priceValue)
                    );
                 }
@@ -66,26 +69,22 @@ namespace DataTableExample.Controllers
                 int recordsFiltered = await query.CountAsync();
 
                 // Sorting
-                if (!string.IsNullOrEmpty(sortColumn) && !string.IsNullOrEmpty(sortColumnDirection))
+                bool descending = sortColumnDirection == "desc";
+                IOrderedQueryable<Medicine> ordered = sortColumn switch
                 {
-                    if (sortColumn == "Name")
-                        query = sortColumnDirection == "asc" ? query.OrderBy(c => c.Name) : query.OrderByDescending(c => c.Name);
-                    else if (sortColumn == "Price")
-                        query = sortColumnDirection == "asc" ? query.OrderBy(c => c.Price) : query.OrderByDescending(c => c.Price);
-                    else if (sortColumn == "ActiveIngredient")
-                        query = sortColumnDirection == "asc" ? query.OrderBy(c => c.ActiveIngredient) : query.OrderByDescending(c => c.ActiveIngredient);
-                    else if (sortColumn == "Manufacturer")
-                        query = sortColumnDirection == "asc" ? query.OrderBy(c => c.Manufacturer) : query.OrderByDescending(c => c.Manufacturer);
-                    else
-                        query = query.OrderByDescending(c => c.Name);
-                }
-                else
-                {
-                    query = query.OrderByDescending(c => c.Name);
-                }
+                    "Price" => descending ? query.OrderByDescending(c => c.Price) : query.OrderBy(c => c.Price),
+                    "ActiveIngredient" => descending ? query.OrderByDescending(c => c.ActiveIngredient) : query.OrderBy(c => c.ActiveIngredient),
+                    "Manufacturer" => descending ? query.OrderByDescending(c => c.Manufacturer) : query.OrderBy(c => c.Manufacturer),
+                    _ => descending ? query.OrderByDescending(c => c.Name) : query.OrderBy(c => c.Name),
+                };
+                query = ordered.ThenBy(c => c.Id); // stable order between pages when values are equal
 
-                // Paging
-                var data = await query.Skip(skip).Take(pageSize).Select(e => new
+                // Paging (DataTables sends length = -1 for "All")
+                query = query.Skip(skip);
+                if (pageSize > 0)
+                    query = query.Take(pageSize);
+
+                var data = await query.Select(e => new
                 {
                     id = e.Id,
                     name = e.Name,
@@ -94,12 +93,13 @@ namespace DataTableExample.Controllers
                     price = e.Price
                 }).ToListAsync();
 
-                return Json(new { draw = draw, recordsFiltered = recordsFiltered, recordsTotal = recordsTotal, data = data });
+                return Json(new { draw, recordsFiltered, recordsTotal, data });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error loading medicine for DataTable");
-                return StatusCode(500, new { error = "Възникна грешка при обработката на вашата заявка" });
+                // DataTables shows the message only from a 200 response with an "error" field
+                return Json(new { draw, error = "Възникна грешка при обработката на вашата заявка" });
             }
         }
 
